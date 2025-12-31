@@ -169,7 +169,7 @@ Claude.md                 # this file (plan + log)
 - [x] Ledger (double-entry + tests) → 14 tests passing
 - [x] PaymentIntent + routing + webhook ingestion + idempotency → 100 tests (routing, transfer, webhook)
 - [x] Daily reconciliation job + exception reporting → 33 tests
-- [ ] Minimal operator endpoints
+- [x] Minimal operator endpoints → 20 tests (loan search/view, ledger, payments, schedule, reversal, customers, audit)
 
 ### Build (Client)
 - [ ] Flutter scaffold + secure storage + auth flows
@@ -196,6 +196,7 @@ Claude.md                 # this file (plan + log)
 - 2025-12-30: Implemented double-entry ledger service with transaction templates (disbursement, repayment, fee, interest, write-off), balance queries, trial balance, and journal reversals. 12 tests passing.
 - 2025-12-30: Implemented payment routing service (RTP→FedNow→push-to-card→ACH fallback), transfer service with Moov integration, and webhook handler. 100 tests covering routing, transfers, and webhooks.
 - 2025-12-30: Added daily reconciliation service comparing local records with Moov provider, detecting status/amount mismatches, orphaned/missing transfers, ledger imbalances, and prefund balance discrepancies. Auto-resolution for status updates. 33 tests. Total: 145 tests passing.
+- 2025-12-30: Added minimal operator endpoints: loan search/view, ledger journals, payment timeline, repayment schedule, journal reversal with step-up auth, customer lookup, audit logs. 20 tests. Total: 165 tests passing. Backend MVP1 complete.
 
 ---
 
