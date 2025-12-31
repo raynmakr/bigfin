@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://bigfin.io/schemas/personal_loan_simple.term_schema.json",
+  "title": "Personal Loan Simple - Term Schema",
+  "description": "JSON Schema defining allowed loan terms for the GreenBucks Personal Loan Simple product. Tenant-scoped; loaded at product instantiation.",
+  "type": "object",
+  "required": [
+    "principal_cents",
+    "apr_bps",
+    "term_months",
+    "payment_frequency",
+    "first_payment_date"
+  ],
+  "properties": {
+    "principal_cents": {
+      "type": "integer",
+      "minimum": 10000,
+      "maximum": 5000000,
+      "description": "Loan principal in cents (USD). Min $100, Max $50,000 for MVP1."
+    },
+    "apr_bps": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600,
+      "description": "Annual Percentage Rate in basis points. Max 36.00% APR to stay within typical usury limits."
+    },
+    "term_months": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60,
+      "description": "Loan term length in months. Min 1 month, Max 5 years for personal loans."
+    },
+    "payment_frequency": {
+      "type": "string",
+      "enum": ["weekly", "biweekly", "semimonthly", "monthly"],
+      "default": "monthly",
+      "description": "How often payments are due. Monthly is default for simplicity."
+    },
+    "first_payment_date": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO 8601 date (YYYY-MM-DD) of the first scheduled payment. Must be at least 7 days after disbursement."
+    },
+    "currency": {
+      "type": "string",
+      "enum": ["USD"],
+      "default": "USD",
+      "description": "Currency code. MVP1 is USD-only."
+    },
+    "amortization_method": {
+      "type": "string",
+      "enum": ["fully_amortizing", "interest_only", "balloon"],
+      "default": "fully_amortizing",
+      "description": "Amortization method. Defaults to fully amortizing for safe, predictable payments."
+    },
+    "advanced": {
+      "type": "object",
+      "description": "Optional advanced term fields. Disabled by default for MVP1 simplicity.",
+      "properties": {
+        "interest_only_periods": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 12,
+          "default": 0,
+          "description": "Number of interest-only periods at start of loan. Only applies if amortization_method=interest_only."
+        },
+        "balloon_payment_cents": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Balloon payment amount in cents due at term end. Only applies if amortization_method=balloon."
+        },
+        "rate_type": {
+          "type": "string",
+          "enum": ["fixed", "variable"],
+          "default": "fixed",
+          "description": "Interest rate type. MVP1 supports fixed only; variable is placeholder for future."
+        },
+        "rate_index": {
+          "type": ["string", "null"],
+          "enum": ["prime", "sofr", null],
+          "default": null,
+          "description": "Index for variable rate loans. Null for fixed rate."
+        },
+        "rate_margin_bps": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Margin over index in basis points for variable rate loans."
+        },
+        "rate_floor_bps": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "default": null,
+          "description": "Minimum APR floor in basis points for variable rate loans."
+        },
+        "rate_ceiling_bps": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "default": null,
+          "description": "Maximum APR ceiling in basis points for variable rate loans."
+        },
+        "prepayment_penalty_enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether prepayment penalties apply. Disabled by default."
+        },
+        "prepayment_penalty_bps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500,
+          "default": 0,
+          "description": "Prepayment penalty as basis points of remaining principal."
+        },
+        "grace_period_days": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30,
+          "default": 15,
+          "description": "Days after due date before payment is considered late."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "validation_rules": {
+      "description": "Business rules enforced at runtime (not expressible in JSON Schema alone)",
+      "rules": [
+        {
+          "id": "first_payment_min_delay",
+          "description": "first_payment_date must be >= disbursement_date + 7 days"
+        },
+        {
+          "id": "balloon_requires_method",
+          "description": "balloon_payment_cents > 0 requires amortization_method = 'balloon'"
+        },
+        {
+          "id": "io_requires_method",
+          "description": "interest_only_periods > 0 requires amortization_method = 'interest_only'"
+        },
+        {
+          "id": "variable_rate_requires_index",
+          "description": "rate_type = 'variable' requires rate_index to be non-null"
+        },
+        {
+          "id": "term_frequency_alignment",
+          "description": "term_months * frequency must produce whole number of payments"
+        }
+      ]
+    },
+    "mvp1_defaults": {
+      "description": "Default values enforced for MVP1 to keep loans simple",
+      "amortization_method": "fully_amortizing",
+      "rate_type": "fixed",
+      "prepayment_penalty_enabled": false,
+      "currency": "USD"
+    }
+  }
+}

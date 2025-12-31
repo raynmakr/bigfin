@@ -1,0 +1,915 @@
+// BigFin Prisma Schema
+// Multi-tenant loan administration system
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// IDENTITY
+// ============================================================================
+
+model Tenant {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  slug        String   @unique
+  status      TenantStatus @default(ACTIVE)
+  config      Json     @default("{}")  // Tenant-specific overrides
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  users           User[]
+  customers       Customer[]
+  loanProducts    LoanProduct[]
+  loanOffers      LoanOffer[]
+  loanContracts   LoanContract[]
+  webhooks        Webhook[]
+  auditLogs       AuditLog[]
+
+  @@map("tenants")
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  email         String
+  passwordHash  String   @map("password_hash")
+  role          UserRole
+  status        UserStatus @default(ACTIVE)
+  lastLoginAt   DateTime? @map("last_login_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  auditLogs     AuditLog[]
+  documentsUploaded Document[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+  READONLY
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+// ============================================================================
+// CUSTOMERS (End users: borrowers and lenders)
+// ============================================================================
+
+model Customer {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  externalId    String?  @map("external_id")
+  role          CustomerRole
+
+  // Identity
+  email         String
+  phone         String?
+  firstName     String   @map("first_name")
+  lastName      String   @map("last_name")
+  businessName  String?  @map("business_name")
+  dateOfBirth   DateTime? @map("date_of_birth") @db.Date
+
+  // Address
+  addressLine1  String?  @map("address_line1")
+  addressLine2  String?  @map("address_line2")
+  city          String?
+  state         String?
+  postalCode    String?  @map("postal_code")
+  country       String   @default("US")
+
+  // KYC & Risk
+  kycLevel      KycLevel @default(NONE) @map("kyc_level")
+  kycStatus     KycStatus @default(NOT_STARTED) @map("kyc_status")
+  kycSubmittedAt DateTime? @map("kyc_submitted_at")
+  kycVerifiedAt DateTime? @map("kyc_verified_at")
+  kycExpiresAt  DateTime? @map("kyc_expires_at")
+  riskTier      RiskTier @default(NEW) @map("risk_tier")
+  riskFlags     String[] @default([]) @map("risk_flags")
+
+  // Status
+  status        CustomerStatus @default(ACTIVE)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  tenant              Tenant   @relation(fields: [tenantId], references: [id])
+  fundingInstruments  FundingInstrument[]
+  prefundTransactions PrefundTransaction[]
+  loansAsLender       LoanOffer[] @relation("LenderOffers")
+  loansAsBorrower     LoanOffer[] @relation("BorrowerOffers")
+  contractsAsLender   LoanContract[] @relation("LenderContracts")
+  contractsAsBorrower LoanContract[] @relation("BorrowerContracts")
+
+  @@unique([tenantId, externalId])
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([tenantId, role])
+  @@map("customers")
+}
+
+enum CustomerRole {
+  BORROWER
+  LENDER
+  BOTH
+}
+
+enum KycLevel {
+  NONE
+  BASIC
+  ENHANCED
+}
+
+enum KycStatus {
+  NOT_STARTED
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum RiskTier {
+  NEW
+  ESTABLISHED
+  TRUSTED
+}
+
+enum CustomerStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+// ============================================================================
+// FUNDING INSTRUMENTS
+// ============================================================================
+
+model FundingInstrument {
+  id            String   @id @default(uuid()) @db.Uuid
+  customerId    String   @map("customer_id") @db.Uuid
+  type          InstrumentType
+  status        InstrumentStatus @default(PENDING_VERIFICATION)
+
+  // Bank account details (masked/tokenized)
+  bankName      String?  @map("bank_name")
+  accountType   AccountType? @map("account_type")
+  last4         String
+
+  // Provider references (Moov)
+  providerRef   String?  @map("provider_ref")
+  providerData  Json?    @map("provider_data")
+
+  // Capabilities
+  supportedRails String[] @default([]) @map("supported_rails")
+  isDefault     Boolean  @default(false) @map("is_default")
+
+  // Verification
+  verificationMethod String? @map("verification_method")
+  verifiedAt    DateTime? @map("verified_at")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  customer      Customer @relation(fields: [customerId], references: [id])
+  disbursements Disbursement[]
+  repayments    Repayment[]
+  prefundTransactions PrefundTransaction[]
+
+  @@index([customerId])
+  @@map("funding_instruments")
+}
+
+enum InstrumentType {
+  BANK_ACCOUNT
+  DEBIT_CARD
+}
+
+enum AccountType {
+  CHECKING
+  SAVINGS
+}
+
+enum InstrumentStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  FAILED
+  REMOVED
+}
+
+// ============================================================================
+// PREFUND (Lender custodial balance)
+// ============================================================================
+
+model PrefundTransaction {
+  id            String   @id @default(uuid()) @db.Uuid
+  customerId    String   @map("customer_id") @db.Uuid
+  type          PrefundTxType
+  amountCents   Int      @map("amount_cents")
+
+  // Status
+  status        PrefundTxStatus @default(PENDING)
+
+  // Linked entities
+  fundingInstrumentId String? @map("funding_instrument_id") @db.Uuid
+  disbursementId      String? @map("disbursement_id") @db.Uuid
+
+  // Provider references
+  rail          String?
+  providerRef   String?  @map("provider_ref")
+
+  // Balances after this transaction
+  balanceAfterCents    Int @map("balance_after_cents")
+  availableAfterCents  Int @map("available_after_cents")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  completedAt   DateTime? @map("completed_at")
+  failedAt      DateTime? @map("failed_at")
+  failureReason String?  @map("failure_reason")
+
+  // Relations
+  customer          Customer @relation(fields: [customerId], references: [id])
+  fundingInstrument FundingInstrument? @relation(fields: [fundingInstrumentId], references: [id])
+  disbursement      Disbursement? @relation(fields: [disbursementId], references: [id])
+
+  @@index([customerId])
+  @@index([customerId, createdAt])
+  @@map("prefund_transactions")
+}
+
+enum PrefundTxType {
+  DEPOSIT
+  WITHDRAWAL
+  DISBURSEMENT_HOLD
+  DISBURSEMENT_RELEASE
+  FEE
+}
+
+enum PrefundTxStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+// ============================================================================
+// PRODUCTS & POLICIES
+// ============================================================================
+
+model LoanProduct {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  name          String
+  code          String
+  status        ProductStatus @default(ACTIVE)
+
+  // Policy documents (JSON)
+  termSchema           Json @map("term_schema")
+  feesPolicy           Json @map("fees_policy")
+  paymentWaterfall     Json @map("payment_waterfall")
+  availabilityPolicy   Json @map("availability_policy")
+
+  // Versioning
+  version       String   @default("1.0.0")
+  effectiveDate DateTime @map("effective_date") @db.Date
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  loanOffers    LoanOffer[]
+  loanContracts LoanContract[]
+
+  @@unique([tenantId, code, version])
+  @@index([tenantId])
+  @@map("loan_products")
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  DEPRECATED
+}
+
+// ============================================================================
+// LOANS
+// ============================================================================
+
+model LoanOffer {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  productId     String   @map("product_id") @db.Uuid
+  lenderId      String   @map("lender_id") @db.Uuid
+  borrowerId    String   @map("borrower_id") @db.Uuid
+
+  // Status
+  status        OfferStatus @default(DRAFT)
+
+  // Terms
+  principalCents    Int      @map("principal_cents")
+  aprBps            Int      @map("apr_bps")
+  termMonths        Int      @map("term_months")
+  paymentFrequency  PaymentFrequency @map("payment_frequency")
+  firstPaymentDate  DateTime? @map("first_payment_date") @db.Date
+
+  // Express fee info
+  expressFeeEstimateCents Int? @map("express_fee_estimate_cents")
+  expressFeeWaived        Boolean @default(false) @map("express_fee_waived")
+
+  // Message
+  message       String?
+
+  // Timestamps
+  expiresAt     DateTime @map("expires_at")
+  sentAt        DateTime? @map("sent_at")
+  viewedAt      DateTime? @map("viewed_at")
+  respondedAt   DateTime? @map("responded_at")
+  rejectionReason String? @map("rejection_reason")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  product       LoanProduct @relation(fields: [productId], references: [id])
+  lender        Customer @relation("LenderOffers", fields: [lenderId], references: [id])
+  borrower      Customer @relation("BorrowerOffers", fields: [borrowerId], references: [id])
+  contract      LoanContract?
+
+  @@index([tenantId])
+  @@index([lenderId])
+  @@index([borrowerId])
+  @@index([status])
+  @@map("loan_offers")
+}
+
+enum OfferStatus {
+  DRAFT
+  SENT
+  VIEWED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum PaymentFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+}
+
+model LoanContract {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  offerId       String   @unique @map("offer_id") @db.Uuid
+  productId     String   @map("product_id") @db.Uuid
+  lenderId      String   @map("lender_id") @db.Uuid
+  borrowerId    String   @map("borrower_id") @db.Uuid
+
+  // Status
+  status        ContractStatus @default(PENDING_DISBURSEMENT)
+
+  // Terms (snapshot from offer)
+  principalCents    Int      @map("principal_cents")
+  aprBps            Int      @map("apr_bps")
+  termMonths        Int      @map("term_months")
+  paymentFrequency  PaymentFrequency @map("payment_frequency")
+  firstPaymentDate  DateTime @map("first_payment_date") @db.Date
+
+  // Current balances (denormalized from ledger for queries)
+  principalBalanceCents  Int @default(0) @map("principal_balance_cents")
+  interestBalanceCents   Int @default(0) @map("interest_balance_cents")
+  feesBalanceCents       Int @default(0) @map("fees_balance_cents")
+
+  // Timestamps
+  originatedAt  DateTime @default(now()) @map("originated_at")
+  disbursedAt   DateTime? @map("disbursed_at")
+  paidOffAt     DateTime? @map("paid_off_at")
+  defaultedAt   DateTime? @map("defaulted_at")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  tenant            Tenant   @relation(fields: [tenantId], references: [id])
+  offer             LoanOffer @relation(fields: [offerId], references: [id])
+  product           LoanProduct @relation(fields: [productId], references: [id])
+  lender            Customer @relation("LenderContracts", fields: [lenderId], references: [id])
+  borrower          Customer @relation("BorrowerContracts", fields: [borrowerId], references: [id])
+  scheduleItems     RepaymentScheduleItem[]
+  disbursements     Disbursement[]
+  repayments        Repayment[]
+  ledgerJournals    LedgerJournal[]
+  documents         Document[]
+
+  @@index([tenantId])
+  @@index([lenderId])
+  @@index([borrowerId])
+  @@index([status])
+  @@map("loan_contracts")
+}
+
+enum ContractStatus {
+  PENDING_DISBURSEMENT
+  ACTIVE
+  PAID_OFF
+  DEFAULTED
+  CANCELLED
+}
+
+model RepaymentScheduleItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  contractId    String   @map("contract_id") @db.Uuid
+  sequence      Int
+
+  // Due amounts
+  dueDate           DateTime @map("due_date") @db.Date
+  principalCents    Int      @map("principal_cents")
+  interestCents     Int      @map("interest_cents")
+  feesCents         Int      @default(0) @map("fees_cents")
+
+  // Status
+  status        ScheduleItemStatus @default(SCHEDULED)
+  paidCents     Int      @default(0) @map("paid_cents")
+  paidAt        DateTime? @map("paid_at")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  contract      LoanContract @relation(fields: [contractId], references: [id])
+
+  @@unique([contractId, sequence])
+  @@index([contractId])
+  @@index([dueDate])
+  @@map("repayment_schedule_items")
+}
+
+enum ScheduleItemStatus {
+  SCHEDULED
+  DUE
+  PAID
+  PARTIAL
+  PAST_DUE
+}
+
+// ============================================================================
+// PAYMENTS
+// ============================================================================
+
+model Disbursement {
+  id            String   @id @default(uuid()) @db.Uuid
+  contractId    String   @map("contract_id") @db.Uuid
+
+  // Amounts
+  amountCents       Int @map("amount_cents")
+  expressFeeCents   Int @default(0) @map("express_fee_cents")
+  netAmountCents    Int @map("net_amount_cents")
+
+  // Routing
+  speed         DisbursementSpeed
+  rail          PaymentRail?
+  source        DisbursementSource @default(DIRECT)
+
+  // Status
+  status        PaymentStatus @default(INITIATED)
+
+  // Destination
+  fundingInstrumentId String @map("funding_instrument_id") @db.Uuid
+
+  // Provider references
+  providerRef   String?  @map("provider_ref")
+  providerData  Json?    @map("provider_data")
+
+  // Availability
+  availabilityState   AvailabilityState @default(INITIATED) @map("availability_state")
+  availableAt         DateTime? @map("available_at")
+  holdReason          String? @map("hold_reason")
+  holdExpiresAt       DateTime? @map("hold_expires_at")
+
+  // Timestamps
+  initiatedAt   DateTime @default(now()) @map("initiated_at")
+  completedAt   DateTime? @map("completed_at")
+  failedAt      DateTime? @map("failed_at")
+  failureReason String?  @map("failure_reason")
+
+  // Idempotency
+  idempotencyKey String? @unique @map("idempotency_key")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  contract          LoanContract @relation(fields: [contractId], references: [id])
+  fundingInstrument FundingInstrument @relation(fields: [fundingInstrumentId], references: [id])
+  prefundTransactions PrefundTransaction[]
+
+  @@index([contractId])
+  @@index([status])
+  @@map("disbursements")
+}
+
+enum DisbursementSpeed {
+  STANDARD
+  INSTANT
+}
+
+enum DisbursementSource {
+  PREFUND
+  DIRECT
+}
+
+model Repayment {
+  id            String   @id @default(uuid()) @db.Uuid
+  contractId    String   @map("contract_id") @db.Uuid
+
+  // Amount
+  amountCents   Int      @map("amount_cents")
+
+  // Routing
+  rail          PaymentRail?
+
+  // Status
+  status        RepaymentStatus @default(SCHEDULED)
+
+  // Source
+  fundingInstrumentId String @map("funding_instrument_id") @db.Uuid
+
+  // Provider references
+  providerRef   String?  @map("provider_ref")
+  providerData  Json?    @map("provider_data")
+
+  // Payment application (how it was applied)
+  appliedFeeCents       Int @default(0) @map("applied_fee_cents")
+  appliedInterestCents  Int @default(0) @map("applied_interest_cents")
+  appliedPrincipalCents Int @default(0) @map("applied_principal_cents")
+  applicationBreakdown  Json? @map("application_breakdown")
+
+  // Availability
+  availabilityState   AvailabilityState @default(INITIATED) @map("availability_state")
+  availableAt         DateTime? @map("available_at")
+  holdReason          String? @map("hold_reason")
+  holdExpiresAt       DateTime? @map("hold_expires_at")
+
+  // Scheduling
+  scheduledDate DateTime? @map("scheduled_date") @db.Date
+  isPayoff      Boolean  @default(false) @map("is_payoff")
+
+  // Timestamps
+  initiatedAt   DateTime? @map("initiated_at")
+  completedAt   DateTime? @map("completed_at")
+  failedAt      DateTime? @map("failed_at")
+  returnedAt    DateTime? @map("returned_at")
+  failureReason String?  @map("failure_reason")
+
+  // Idempotency
+  idempotencyKey String? @unique @map("idempotency_key")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  contract          LoanContract @relation(fields: [contractId], references: [id])
+  fundingInstrument FundingInstrument @relation(fields: [fundingInstrumentId], references: [id])
+
+  @@index([contractId])
+  @@index([status])
+  @@index([scheduledDate])
+  @@map("repayments")
+}
+
+enum PaymentRail {
+  ACH
+  SAME_DAY_ACH
+  RTP
+  FEDNOW
+  PUSH_TO_CARD
+}
+
+enum PaymentStatus {
+  INITIATED
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum RepaymentStatus {
+  SCHEDULED
+  INITIATED
+  PENDING
+  COMPLETED
+  FAILED
+  RETURNED
+  CANCELLED
+}
+
+enum AvailabilityState {
+  INITIATED
+  PENDING
+  RECEIVED
+  HELD
+  AVAILABLE
+  FAILED
+}
+
+// ============================================================================
+// LEDGER (Double-entry, append-only)
+// ============================================================================
+
+model LedgerAccount {
+  id            String   @id @default(uuid()) @db.Uuid
+  code          String   @unique  // Hierarchical: "assets:loans_receivable:principal"
+  name          String
+  type          AccountType2
+  isSystem      Boolean  @default(false) @map("is_system")
+  parentCode    String?  @map("parent_code")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  entries       LedgerEntry[]
+
+  @@map("ledger_accounts")
+}
+
+enum AccountType2 {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+model LedgerJournal {
+  id            String   @id @default(uuid()) @db.Uuid
+  contractId    String?  @map("contract_id") @db.Uuid
+  type          JournalType
+  description   String
+
+  // Reversal tracking
+  isReversal            Boolean @default(false) @map("is_reversal")
+  reversesJournalId     String? @unique @map("reverses_journal_id") @db.Uuid
+  reversedByJournalId   String? @unique @map("reversed_by_journal_id") @db.Uuid
+  reversalReason        String? @map("reversal_reason")
+
+  // Audit
+  createdBy     String?  @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  contract          LoanContract? @relation(fields: [contractId], references: [id])
+  entries           LedgerEntry[]
+  reversesJournal   LedgerJournal? @relation("JournalReversal", fields: [reversesJournalId], references: [id])
+  reversedByJournal LedgerJournal? @relation("JournalReversal")
+
+  @@index([contractId])
+  @@index([createdAt])
+  @@map("ledger_journals")
+}
+
+enum JournalType {
+  DISBURSEMENT
+  REPAYMENT
+  FEE_ASSESSMENT
+  INTEREST_ACCRUAL
+  REVERSAL
+  ADJUSTMENT
+}
+
+model LedgerEntry {
+  id            String   @id @default(uuid()) @db.Uuid
+  journalId     String   @map("journal_id") @db.Uuid
+  accountCode   String   @map("account_code")
+
+  // Amounts (one must be zero)
+  debitCents    Int      @default(0) @map("debit_cents")
+  creditCents   Int      @default(0) @map("credit_cents")
+
+  // Running balance for this account
+  balanceAfterCents Int  @map("balance_after_cents")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  journal       LedgerJournal @relation(fields: [journalId], references: [id])
+  account       LedgerAccount @relation(fields: [accountCode], references: [code])
+
+  @@index([journalId])
+  @@index([accountCode])
+  @@map("ledger_entries")
+}
+
+// ============================================================================
+// DOCUMENTS
+// ============================================================================
+
+model Document {
+  id            String   @id @default(uuid()) @db.Uuid
+  contractId    String?  @map("contract_id") @db.Uuid
+  type          DocumentType
+
+  // File info
+  filename      String
+  contentType   String   @map("content_type")
+  sizeBytes     Int      @map("size_bytes")
+  sha256        String
+
+  // Storage
+  storageRef    String   @map("storage_ref")
+
+  // Metadata
+  description   String?
+  uploadedById  String   @map("uploaded_by_id") @db.Uuid
+
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  contract      LoanContract? @relation(fields: [contractId], references: [id])
+  uploadedBy    User @relation(fields: [uploadedById], references: [id])
+
+  @@index([contractId])
+  @@map("documents")
+}
+
+enum DocumentType {
+  RECEIPT
+  STATEMENT
+  CONTRACT
+  AMENDMENT
+  OTHER
+}
+
+// ============================================================================
+// WEBHOOKS
+// ============================================================================
+
+model Webhook {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  url           String
+  events        String[]
+  secret        String
+  status        WebhookStatus @default(ACTIVE)
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  deliveries    WebhookDelivery[]
+
+  @@index([tenantId])
+  @@map("webhooks")
+}
+
+enum WebhookStatus {
+  ACTIVE
+  DISABLED
+}
+
+model WebhookDelivery {
+  id            String   @id @default(uuid()) @db.Uuid
+  webhookId     String   @map("webhook_id") @db.Uuid
+  eventType     String   @map("event_type")
+  payload       Json
+
+  // Delivery status
+  status        DeliveryStatus @default(PENDING)
+  attempts      Int      @default(0)
+  lastAttemptAt DateTime? @map("last_attempt_at")
+  responseCode  Int?     @map("response_code")
+  responseBody  String?  @map("response_body")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  webhook       Webhook @relation(fields: [webhookId], references: [id])
+
+  @@index([webhookId])
+  @@index([status])
+  @@map("webhook_deliveries")
+}
+
+enum DeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+}
+
+// ============================================================================
+// AUDIT & RECONCILIATION
+// ============================================================================
+
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  userId        String?  @map("user_id") @db.Uuid
+
+  // Action
+  action        String
+  entityType    String   @map("entity_type")
+  entityId      String   @map("entity_id") @db.Uuid
+
+  // Details
+  changes       Json?
+  metadata      Json?
+  ipAddress     String?  @map("ip_address")
+  userAgent     String?  @map("user_agent")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  tenant        Tenant @relation(fields: [tenantId], references: [id])
+  user          User?  @relation(fields: [userId], references: [id])
+
+  @@index([tenantId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model ReconciliationException {
+  id            String   @id @default(uuid()) @db.Uuid
+  date          DateTime @db.Date
+  type          ExceptionType
+  severity      Severity
+
+  // Details
+  description       String
+  affectedEntityType String @map("affected_entity_type")
+  affectedEntityId   String @map("affected_entity_id") @db.Uuid
+  expectedValue     String? @map("expected_value")
+  actualValue       String? @map("actual_value")
+
+  // Status
+  status            ExceptionStatus @default(OPEN)
+  resolutionNotes   String? @map("resolution_notes")
+  resolvedById      String? @map("resolved_by_id") @db.Uuid
+  resolvedAt        DateTime? @map("resolved_at")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([date])
+  @@index([status])
+  @@map("reconciliation_exceptions")
+}
+
+enum ExceptionType {
+  BALANCE_MISMATCH
+  STUCK_PAYMENT
+  DUPLICATE_TRANSACTION
+  MISSING_WEBHOOK
+  OTHER
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ExceptionStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+}
+
+// ============================================================================
+// IDEMPOTENCY
+// ============================================================================
+
+model IdempotencyKey {
+  key           String   @id
+  response      Json
+  statusCode    Int      @map("status_code")
+  createdAt     DateTime @default(now()) @map("created_at")
+  expiresAt     DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}

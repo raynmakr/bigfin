@@ -1,0 +1,320 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://bigfin.io/schemas/personal_loan_simple.availability_policy.json",
+  "title": "Personal Loan Simple - Availability Policy",
+  "description": "Defines when funds become available to recipients based on payment rail, risk tier, and prefund status. Tenant-scoped.",
+  "_design_rationale": {
+    "core_principle": "Separate payment status from funds availability",
+    "why_this_matters": [
+      "Payment 'submitted' or 'received' does not mean funds are spendable",
+      "Risk-based holds protect against fraud and returns",
+      "Prefunding unlocks instant availability without increasing platform risk",
+      "Clear availability timelines set correct user expectations"
+    ],
+    "tier_model": "Risk tiers determine hold durations; higher trust = faster availability",
+    "prefund_advantage": "Prefunded lenders get instant availability because platform holds the funds"
+  },
+  "version": "1.0.0",
+  "effective_date": "2025-01-01",
+  "availability_states": {
+    "description": "Funds progress through these states. UI should show current state to users.",
+    "states": [
+      {
+        "state": "initiated",
+        "description": "Payment request submitted to provider. Funds not yet in motion.",
+        "user_message": "Payment initiated"
+      },
+      {
+        "state": "pending",
+        "description": "Funds in transit via payment rail. Not yet received by destination.",
+        "user_message": "Payment processing"
+      },
+      {
+        "state": "received",
+        "description": "Funds received at destination account but may be subject to hold.",
+        "user_message": "Payment received - processing"
+      },
+      {
+        "state": "held",
+        "description": "Funds received but held pending risk review or hold period expiry.",
+        "user_message": "Funds on hold"
+      },
+      {
+        "state": "available",
+        "description": "Funds cleared and available for use/withdrawal.",
+        "user_message": "Funds available"
+      },
+      {
+        "state": "failed",
+        "description": "Payment failed or was returned. Funds not available.",
+        "user_message": "Payment failed"
+      }
+    ]
+  },
+  "risk_tiers": {
+    "description": "Risk-based tiers determine hold durations and limits. Assigned based on KYC level, history, and risk flags.",
+    "tiers": [
+      {
+        "tier": "new",
+        "description": "New users with minimal history",
+        "kyc_level_min": "basic",
+        "transaction_history_days": 0,
+        "hold_multiplier": 1.0
+      },
+      {
+        "tier": "established",
+        "description": "Users with 30+ days history and no issues",
+        "kyc_level_min": "basic",
+        "transaction_history_days": 30,
+        "successful_transactions_min": 3,
+        "hold_multiplier": 0.5
+      },
+      {
+        "tier": "trusted",
+        "description": "Users with 90+ days, enhanced KYC, no issues",
+        "kyc_level_min": "enhanced",
+        "transaction_history_days": 90,
+        "successful_transactions_min": 10,
+        "hold_multiplier": 0.0
+      }
+    ],
+    "assignment_rules": {
+      "default_tier": "new",
+      "upgrade_evaluation": "after_each_successful_transaction",
+      "downgrade_triggers": ["nsf_return", "fraud_flag", "dispute_loss", "kyc_expiry"]
+    }
+  },
+  "availability_rules_by_rail": {
+    "description": "Base availability timelines by payment rail. Hold durations modified by risk tier multiplier.",
+    "rtp": {
+      "rail_name": "Real-Time Payments",
+      "settlement_type": "immediate",
+      "base_availability": {
+        "disbursement": {
+          "initiated_to_received_hours": 0,
+          "received_to_available_hours": 0,
+          "description": "RTP settles in seconds; funds available immediately"
+        },
+        "repayment": {
+          "initiated_to_received_hours": 0,
+          "base_hold_hours": 0,
+          "description": "RTP repayments available immediately (settlement is final)"
+        }
+      },
+      "failure_handling": {
+        "retry_eligible": false,
+        "fallback_rail": "fednow",
+        "description": "RTP rejections are immediate; no retry, try next rail"
+      }
+    },
+    "fednow": {
+      "rail_name": "FedNow",
+      "settlement_type": "immediate",
+      "base_availability": {
+        "disbursement": {
+          "initiated_to_received_hours": 0,
+          "received_to_available_hours": 0,
+          "description": "FedNow settles in seconds; funds available immediately"
+        },
+        "repayment": {
+          "initiated_to_received_hours": 0,
+          "base_hold_hours": 0,
+          "description": "FedNow repayments available immediately (settlement is final)"
+        }
+      },
+      "failure_handling": {
+        "retry_eligible": false,
+        "fallback_rail": "push_to_card",
+        "description": "FedNow rejections are immediate; no retry, try next rail"
+      }
+    },
+    "push_to_card": {
+      "rail_name": "Push to Debit Card",
+      "settlement_type": "near_immediate",
+      "base_availability": {
+        "disbursement": {
+          "initiated_to_received_hours": 0.5,
+          "received_to_available_hours": 0,
+          "description": "Push-to-card typically posts within 30 minutes"
+        },
+        "repayment": {
+          "initiated_to_received_hours": 0.5,
+          "base_hold_hours": 24,
+          "description": "Card repayments held 24h due to chargeback risk"
+        }
+      },
+      "failure_handling": {
+        "retry_eligible": true,
+        "retry_delay_minutes": 60,
+        "max_retries": 1,
+        "fallback_rail": "ach",
+        "description": "One retry after 60 min, then fall back to ACH"
+      }
+    },
+    "same_day_ach": {
+      "rail_name": "Same Day ACH",
+      "settlement_type": "same_day",
+      "base_availability": {
+        "disbursement": {
+          "initiated_to_received_hours": 4,
+          "received_to_available_hours": 0,
+          "description": "Same-day ACH settles within 4 hours during business hours"
+        },
+        "repayment": {
+          "initiated_to_received_hours": 4,
+          "base_hold_hours": 48,
+          "description": "ACH repayments held 48h due to return risk"
+        }
+      },
+      "cutoff_times": {
+        "timezone": "America/New_York",
+        "cutoffs": ["10:30", "14:45", "16:00"],
+        "description": "NACHA same-day ACH windows"
+      },
+      "failure_handling": {
+        "retry_eligible": true,
+        "retry_delay_hours": 24,
+        "max_retries": 2,
+        "fallback_rail": "ach",
+        "description": "Retry twice, then fall back to standard ACH"
+      }
+    },
+    "ach": {
+      "rail_name": "Standard ACH",
+      "settlement_type": "next_day_plus",
+      "base_availability": {
+        "disbursement": {
+          "initiated_to_received_business_days": 1,
+          "received_to_available_hours": 0,
+          "description": "Standard ACH settles in 1-2 business days"
+        },
+        "repayment": {
+          "initiated_to_received_business_days": 1,
+          "base_hold_hours": 72,
+          "description": "ACH repayments held 72h (3 days) due to return window"
+        }
+      },
+      "failure_handling": {
+        "retry_eligible": true,
+        "retry_delay_business_days": 2,
+        "max_retries": 2,
+        "description": "Retry twice with 2 business day delays"
+      }
+    }
+  },
+  "prefund_availability": {
+    "description": "Special availability rules when disbursing from lender prefund balance",
+    "disbursement_from_prefund": {
+      "availability": "immediate",
+      "hold_hours": 0,
+      "description": "Funds disbursed from prefund are available immediately because platform already holds the money"
+    },
+    "prefund_deposit_availability": {
+      "description": "When lenders deposit into their prefund account",
+      "by_rail": {
+        "rtp": { "hold_hours": 0 },
+        "fednow": { "hold_hours": 0 },
+        "push_to_card": { "hold_hours": 24 },
+        "ach": { "hold_hours": 72 }
+      }
+    },
+    "prefund_withdrawal": {
+      "description": "When lenders withdraw from their prefund account",
+      "minimum_balance_after_withdrawal_cents": 0,
+      "pending_disbursement_hold": true,
+      "hold_description": "Cannot withdraw funds committed to pending disbursements"
+    }
+  },
+  "hold_overrides": {
+    "description": "Conditions that can extend or reduce standard holds",
+    "extend_hold": [
+      {
+        "trigger": "high_risk_flag",
+        "additional_hold_hours": 48,
+        "description": "Add 48h hold if user has high-risk flags"
+      },
+      {
+        "trigger": "large_amount",
+        "threshold_cents": 500000,
+        "additional_hold_hours": 24,
+        "description": "Add 24h hold for transactions over $5,000"
+      },
+      {
+        "trigger": "first_transaction",
+        "additional_hold_hours": 24,
+        "description": "Add 24h hold for user's first transaction"
+      }
+    ],
+    "reduce_hold": [
+      {
+        "trigger": "trusted_tier",
+        "reduction_multiplier": 0.0,
+        "description": "Trusted tier users have no holds"
+      },
+      {
+        "trigger": "established_tier",
+        "reduction_multiplier": 0.5,
+        "description": "Established tier users have 50% reduced holds"
+      }
+    ]
+  },
+  "limits": {
+    "description": "Transaction and balance limits by risk tier",
+    "disbursement_limits": {
+      "new": {
+        "per_transaction_cents": 500000,
+        "daily_cents": 500000,
+        "monthly_cents": 2500000
+      },
+      "established": {
+        "per_transaction_cents": 1000000,
+        "daily_cents": 2000000,
+        "monthly_cents": 10000000
+      },
+      "trusted": {
+        "per_transaction_cents": 2500000,
+        "daily_cents": 5000000,
+        "monthly_cents": 25000000
+      }
+    },
+    "prefund_limits": {
+      "minimum_deposit_cents": 10000,
+      "maximum_balance_cents": 10000000,
+      "description": "Prefund balance limits for risk management"
+    }
+  },
+  "reconciliation": {
+    "description": "Daily reconciliation requirements for availability tracking",
+    "daily_jobs": [
+      {
+        "job": "release_expired_holds",
+        "schedule": "0 6 * * *",
+        "timezone": "America/New_York",
+        "description": "Release funds from holds that have expired"
+      },
+      {
+        "job": "check_pending_settlements",
+        "schedule": "0 */2 * * *",
+        "description": "Check payment provider for settlement status every 2 hours"
+      },
+      {
+        "job": "flag_stuck_payments",
+        "schedule": "0 8 * * *",
+        "threshold_hours": 72,
+        "description": "Flag payments that haven't settled within expected window"
+      }
+    ],
+    "exception_handling": {
+      "stuck_payment_action": "create_exception_ticket",
+      "return_handling": "reverse_availability_and_notify",
+      "description": "Automated handling of exceptions; human review for edge cases"
+    }
+  },
+  "audit_requirements": {
+    "log_state_transitions": true,
+    "log_hold_overrides": true,
+    "log_limit_checks": true,
+    "retention_days": 2555,
+    "description": "7-year retention for financial audit compliance"
+  }
+}

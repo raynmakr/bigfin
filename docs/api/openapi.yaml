@@ -1,0 +1,2219 @@
+openapi: 3.1.0
+info:
+  title: BigFin API
+  version: 0.1.0
+  description: |
+    Multi-tenant loan administration API powering GreenBucks and other operator apps.
+
+    ## Key Concepts
+    - **Tenant**: Operator app (e.g., GreenBucks) with isolated data
+    - **EndCustomer**: Borrower or lender on the platform
+    - **LoanOffer**: Proposed loan terms from lender to borrower
+    - **LoanContract**: Accepted offer with repayment schedule
+    - **PaymentIntent**: Idempotent payment request (disbursement or repayment)
+
+    ## Idempotency
+    All POST endpoints that create resources or initiate payments accept an `Idempotency-Key` header.
+    Requests with the same key within 24 hours return the original response.
+
+    ## Error Codes
+    See the Error Taxonomy section at the bottom of this spec.
+  contact:
+    name: BigFin API Support
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.bigfin.io/v1
+    description: Production
+  - url: https://sandbox.api.bigfin.io/v1
+    description: Sandbox
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Auth
+    description: Authentication and token management
+  - name: Customers
+    description: End customer (borrower/lender) management
+  - name: Funding Instruments
+    description: Bank accounts and debit cards
+  - name: Prefund
+    description: Lender prefund account operations
+  - name: Loan Offers
+    description: Create and manage loan offers
+  - name: Loan Contracts
+    description: Active loans with schedules and ledgers
+  - name: Disbursements
+    description: Fund disbursement to borrowers
+  - name: Repayments
+    description: Loan repayments from borrowers
+  - name: Documents
+    description: Loan-related document management
+  - name: Webhooks
+    description: Webhook event delivery
+  - name: Operator
+    description: Operator console endpoints (elevated access)
+
+paths:
+  # ============ AUTH ============
+  /auth/token:
+    post:
+      tags: [Auth]
+      summary: Get access token
+      description: Exchange credentials for JWT access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grant_type]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [client_credentials, password, refresh_token]
+                client_id:
+                  type: string
+                client_secret:
+                  type: string
+                username:
+                  type: string
+                password:
+                  type: string
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ============ CUSTOMERS ============
+  /customers:
+    post:
+      tags: [Customers]
+      summary: Create end customer
+      description: Register a new borrower or lender
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCustomerRequest'
+      responses:
+        '201':
+          description: Customer created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+    get:
+      tags: [Customers]
+      summary: List customers
+      parameters:
+        - name: role
+          in: query
+          schema:
+            type: string
+            enum: [borrower, lender, both]
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Customer list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerList'
+
+  /customers/{customer_id}:
+    parameters:
+      - $ref: '#/components/parameters/CustomerId'
+    get:
+      tags: [Customers]
+      summary: Get customer details
+      responses:
+        '200':
+          description: Customer details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags: [Customers]
+      summary: Update customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCustomerRequest'
+      responses:
+        '200':
+          description: Customer updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+
+  /customers/{customer_id}/kyc:
+    parameters:
+      - $ref: '#/components/parameters/CustomerId'
+    get:
+      tags: [Customers]
+      summary: Get KYC status
+      responses:
+        '200':
+          description: KYC status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KycStatus'
+
+    post:
+      tags: [Customers]
+      summary: Submit KYC verification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KycSubmission'
+      responses:
+        '202':
+          description: KYC submission accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KycStatus'
+
+  # ============ FUNDING INSTRUMENTS ============
+  /customers/{customer_id}/funding-instruments:
+    parameters:
+      - $ref: '#/components/parameters/CustomerId'
+    post:
+      tags: [Funding Instruments]
+      summary: Add funding instrument
+      description: Link a bank account or debit card
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFundingInstrumentRequest'
+      responses:
+        '201':
+          description: Instrument created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FundingInstrument'
+
+    get:
+      tags: [Funding Instruments]
+      summary: List funding instruments
+      responses:
+        '200':
+          description: Instrument list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FundingInstrumentList'
+
+  /funding-instruments/{instrument_id}:
+    parameters:
+      - $ref: '#/components/parameters/InstrumentId'
+    get:
+      tags: [Funding Instruments]
+      summary: Get funding instrument
+      responses:
+        '200':
+          description: Instrument details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FundingInstrument'
+
+    delete:
+      tags: [Funding Instruments]
+      summary: Remove funding instrument
+      responses:
+        '204':
+          description: Instrument removed
+
+  /funding-instruments/{instrument_id}/verify:
+    parameters:
+      - $ref: '#/components/parameters/InstrumentId'
+    post:
+      tags: [Funding Instruments]
+      summary: Verify micro-deposits
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amounts_cents]
+              properties:
+                amounts_cents:
+                  type: array
+                  items:
+                    type: integer
+                  minItems: 2
+                  maxItems: 2
+                  example: [12, 34]
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FundingInstrument'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  # ============ PREFUND ============
+  /customers/{customer_id}/prefund:
+    parameters:
+      - $ref: '#/components/parameters/CustomerId'
+    get:
+      tags: [Prefund]
+      summary: Get prefund account balance
+      responses:
+        '200':
+          description: Prefund balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrefundAccount'
+
+  /customers/{customer_id}/prefund/deposit:
+    parameters:
+      - $ref: '#/components/parameters/CustomerId'
+    post:
+      tags: [Prefund]
+      summary: Deposit to prefund account
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrefundDepositRequest'
+      responses:
+        '202':
+          description: Deposit initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrefundTransaction'
+
+  /customers/{customer_id}/prefund/withdraw:
+    parameters:
+      - $ref: '#/components/parameters/CustomerId'
+    post:
+      tags: [Prefund]
+      summary: Withdraw from prefund account
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrefundWithdrawRequest'
+      responses:
+        '202':
+          description: Withdrawal initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrefundTransaction'
+        '400':
+          description: Insufficient available balance
+          $ref: '#/components/responses/BadRequest'
+
+  /customers/{customer_id}/prefund/transactions:
+    parameters:
+      - $ref: '#/components/parameters/CustomerId'
+    get:
+      tags: [Prefund]
+      summary: List prefund transactions
+      parameters:
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Transaction list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrefundTransactionList'
+
+  # ============ LOAN OFFERS ============
+  /loan-offers:
+    post:
+      tags: [Loan Offers]
+      summary: Create loan offer
+      description: |
+        Lender creates an offer to send to a borrower.
+        Terms are validated against the product's term schema.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLoanOfferRequest'
+      responses:
+        '201':
+          description: Offer created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanOffer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+    get:
+      tags: [Loan Offers]
+      summary: List loan offers
+      parameters:
+        - name: lender_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: borrower_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, sent, viewed, accepted, rejected, expired, cancelled]
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Offer list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanOfferList'
+
+  /loan-offers/{offer_id}:
+    parameters:
+      - $ref: '#/components/parameters/OfferId'
+    get:
+      tags: [Loan Offers]
+      summary: Get loan offer
+      responses:
+        '200':
+          description: Offer details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanOffer'
+
+  /loan-offers/{offer_id}/send:
+    parameters:
+      - $ref: '#/components/parameters/OfferId'
+    post:
+      tags: [Loan Offers]
+      summary: Send offer to borrower
+      description: Transitions offer from draft to sent, notifies borrower
+      responses:
+        '200':
+          description: Offer sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanOffer'
+        '409':
+          description: Offer not in draft status
+          $ref: '#/components/responses/Conflict'
+
+  /loan-offers/{offer_id}/accept:
+    parameters:
+      - $ref: '#/components/parameters/OfferId'
+    post:
+      tags: [Loan Offers]
+      summary: Accept loan offer
+      description: |
+        Borrower accepts the offer. Creates a LoanContract and generates repayment schedule.
+        Must specify disbursement preferences.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptOfferRequest'
+      responses:
+        '201':
+          description: Contract created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanContract'
+        '409':
+          description: Offer not in sent/viewed status
+          $ref: '#/components/responses/Conflict'
+
+  /loan-offers/{offer_id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/OfferId'
+    post:
+      tags: [Loan Offers]
+      summary: Reject loan offer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: Offer rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanOffer'
+
+  /loan-offers/{offer_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/OfferId'
+    post:
+      tags: [Loan Offers]
+      summary: Cancel loan offer
+      description: Lender cancels an offer before it's accepted
+      responses:
+        '200':
+          description: Offer cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanOffer'
+        '409':
+          description: Offer already accepted
+          $ref: '#/components/responses/Conflict'
+
+  # ============ LOAN CONTRACTS ============
+  /loan-contracts:
+    get:
+      tags: [Loan Contracts]
+      summary: List loan contracts
+      parameters:
+        - name: lender_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: borrower_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending_disbursement, active, paid_off, defaulted, cancelled]
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Contract list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanContractList'
+
+  /loan-contracts/{contract_id}:
+    parameters:
+      - $ref: '#/components/parameters/ContractId'
+    get:
+      tags: [Loan Contracts]
+      summary: Get loan contract
+      responses:
+        '200':
+          description: Contract details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanContract'
+
+  /loan-contracts/{contract_id}/schedule:
+    parameters:
+      - $ref: '#/components/parameters/ContractId'
+    get:
+      tags: [Loan Contracts]
+      summary: Get repayment schedule
+      responses:
+        '200':
+          description: Repayment schedule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepaymentSchedule'
+
+  /loan-contracts/{contract_id}/ledger:
+    parameters:
+      - $ref: '#/components/parameters/ContractId'
+    get:
+      tags: [Loan Contracts]
+      summary: Get loan ledger
+      description: Returns all ledger entries for this loan
+      parameters:
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Ledger entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerEntryList'
+
+  /loan-contracts/{contract_id}/summary:
+    parameters:
+      - $ref: '#/components/parameters/ContractId'
+    get:
+      tags: [Loan Contracts]
+      summary: Get loan summary
+      description: Current balances, next payment, status
+      responses:
+        '200':
+          description: Loan summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanSummary'
+
+  # ============ DISBURSEMENTS ============
+  /loan-contracts/{contract_id}/disburse:
+    parameters:
+      - $ref: '#/components/parameters/ContractId'
+    post:
+      tags: [Disbursements]
+      summary: Initiate disbursement
+      description: |
+        Initiates fund transfer to borrower. Speed can be `standard` (ACH) or `instant`
+        (RTP/FedNow/push-to-card with fallback).
+
+        If `speed=instant` and lender has sufficient prefund, express fee is waived.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisbursementRequest'
+      responses:
+        '202':
+          description: Disbursement initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Disbursement'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Loan not in pending_disbursement status
+          $ref: '#/components/responses/Conflict'
+
+  /disbursements/{disbursement_id}:
+    parameters:
+      - $ref: '#/components/parameters/DisbursementId'
+    get:
+      tags: [Disbursements]
+      summary: Get disbursement status
+      responses:
+        '200':
+          description: Disbursement details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Disbursement'
+
+  # ============ REPAYMENTS ============
+  /loan-contracts/{contract_id}/repayments:
+    parameters:
+      - $ref: '#/components/parameters/ContractId'
+    post:
+      tags: [Repayments]
+      summary: Initiate repayment
+      description: |
+        Borrower initiates a payment. Amount is applied according to payment waterfall policy.
+        Can be scheduled or immediate.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepaymentRequest'
+      responses:
+        '202':
+          description: Repayment initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repayment'
+
+    get:
+      tags: [Repayments]
+      summary: List repayments
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [scheduled, initiated, pending, completed, failed, returned]
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Repayment list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepaymentList'
+
+  /repayments/{repayment_id}:
+    parameters:
+      - $ref: '#/components/parameters/RepaymentId'
+    get:
+      tags: [Repayments]
+      summary: Get repayment status
+      responses:
+        '200':
+          description: Repayment details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repayment'
+
+  /repayments/{repayment_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/RepaymentId'
+    post:
+      tags: [Repayments]
+      summary: Cancel scheduled repayment
+      description: Only scheduled (not yet initiated) repayments can be cancelled
+      responses:
+        '200':
+          description: Repayment cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repayment'
+        '409':
+          description: Repayment already initiated
+          $ref: '#/components/responses/Conflict'
+
+  # ============ DOCUMENTS ============
+  /loan-contracts/{contract_id}/documents:
+    parameters:
+      - $ref: '#/components/parameters/ContractId'
+    post:
+      tags: [Documents]
+      summary: Upload document
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, document_type]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                document_type:
+                  type: string
+                  enum: [receipt, statement, contract, amendment, other]
+                description:
+                  type: string
+                  maxLength: 500
+      responses:
+        '201':
+          description: Document uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+
+    get:
+      tags: [Documents]
+      summary: List loan documents
+      parameters:
+        - name: document_type
+          in: query
+          schema:
+            type: string
+            enum: [receipt, statement, contract, amendment, other]
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Document list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentList'
+
+  /documents/{document_id}:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Documents]
+      summary: Get document metadata
+      responses:
+        '200':
+          description: Document metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+
+  /documents/{document_id}/download:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Documents]
+      summary: Download document
+      responses:
+        '200':
+          description: Document file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            image/*:
+              schema:
+                type: string
+                format: binary
+
+  # ============ WEBHOOKS ============
+  /webhooks:
+    post:
+      tags: [Webhooks]
+      summary: Register webhook endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebhookRequest'
+      responses:
+        '201':
+          description: Webhook registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+
+    get:
+      tags: [Webhooks]
+      summary: List webhook endpoints
+      responses:
+        '200':
+          description: Webhook list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookList'
+
+  /webhooks/{webhook_id}:
+    parameters:
+      - name: webhook_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [Webhooks]
+      summary: Delete webhook endpoint
+      responses:
+        '204':
+          description: Webhook deleted
+
+  # ============ OPERATOR ENDPOINTS ============
+  /operator/loans:
+    get:
+      tags: [Operator]
+      summary: Search loans
+      description: Operator search across all loans with filters
+      parameters:
+        - name: q
+          in: query
+          description: Search query (customer name, email, loan ID)
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending_disbursement, active, paid_off, defaulted, cancelled]
+        - name: created_after
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: created_before
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanContractList'
+
+  /operator/ledger-journals/{journal_id}/reverse:
+    parameters:
+      - name: journal_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Operator]
+      summary: Reverse ledger journal
+      description: |
+        Creates a reversing journal entry. Requires step-up authentication.
+        Original journal is not modified (append-only ledger).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: X-Step-Up-Token
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Step-up authentication token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 10
+                  maxLength: 1000
+                  description: Detailed reason for reversal (audit requirement)
+      responses:
+        '201':
+          description: Reversal journal created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerJournal'
+        '400':
+          description: Journal already reversed
+          $ref: '#/components/responses/BadRequest'
+
+  /operator/reconciliation/exceptions:
+    get:
+      tags: [Operator]
+      summary: List reconciliation exceptions
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, investigating, resolved]
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/PageLimit'
+      responses:
+        '200':
+          description: Exception list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationExceptionList'
+
+  /operator/reconciliation/exceptions/{exception_id}:
+    parameters:
+      - name: exception_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Operator]
+      summary: Update exception status
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [investigating, resolved]
+                resolution_notes:
+                  type: string
+      responses:
+        '200':
+          description: Exception updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationException'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+      description: Unique key for idempotent requests. Same key within 24h returns cached response.
+
+    PageCursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+      description: Pagination cursor from previous response
+
+    PageLimit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    CustomerId:
+      name: customer_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    InstrumentId:
+      name: instrument_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    OfferId:
+      name: offer_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    ContractId:
+      name: contract_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    DisbursementId:
+      name: disbursement_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    RepaymentId:
+      name: repayment_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    DocumentId:
+      name: document_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    # ===== Auth =====
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+          description: Seconds until expiry
+        refresh_token:
+          type: string
+        scope:
+          type: string
+
+    # ===== Customers =====
+    Customer:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        external_id:
+          type: string
+          description: Client-provided ID
+        role:
+          type: string
+          enum: [borrower, lender, both]
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        first_name:
+          type: string
+        last_name:
+          type: string
+        business_name:
+          type: string
+        kyc_level:
+          type: string
+          enum: [none, basic, enhanced]
+        risk_tier:
+          type: string
+          enum: [new, established, trusted]
+        risk_flags:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateCustomerRequest:
+      type: object
+      required: [role, email, first_name, last_name]
+      properties:
+        external_id:
+          type: string
+        role:
+          type: string
+          enum: [borrower, lender, both]
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        first_name:
+          type: string
+        last_name:
+          type: string
+        business_name:
+          type: string
+        date_of_birth:
+          type: string
+          format: date
+        address:
+          $ref: '#/components/schemas/Address'
+
+    UpdateCustomerRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        address:
+          $ref: '#/components/schemas/Address'
+
+    CustomerList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Customer'
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    Address:
+      type: object
+      properties:
+        line1:
+          type: string
+        line2:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        postal_code:
+          type: string
+        country:
+          type: string
+          default: US
+
+    KycStatus:
+      type: object
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+        level:
+          type: string
+          enum: [none, basic, enhanced]
+        status:
+          type: string
+          enum: [not_started, pending, approved, rejected, expired]
+        submitted_at:
+          type: string
+          format: date-time
+        verified_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        rejection_reason:
+          type: string
+
+    KycSubmission:
+      type: object
+      required: [level]
+      properties:
+        level:
+          type: string
+          enum: [basic, enhanced]
+        ssn_last4:
+          type: string
+          pattern: '^\d{4}$'
+        date_of_birth:
+          type: string
+          format: date
+        address:
+          $ref: '#/components/schemas/Address'
+        document_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    # ===== Funding Instruments =====
+    FundingInstrument:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        customer_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [bank_account, debit_card]
+        status:
+          type: string
+          enum: [pending_verification, verified, failed, removed]
+        bank_name:
+          type: string
+        account_type:
+          type: string
+          enum: [checking, savings]
+        last4:
+          type: string
+        supported_rails:
+          type: array
+          items:
+            type: string
+            enum: [ach, same_day_ach, rtp, fednow, push_to_card]
+        is_default:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    CreateFundingInstrumentRequest:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [bank_account, debit_card]
+        # Bank account fields (Plaid or manual)
+        plaid_token:
+          type: string
+          description: Plaid processor token
+        routing_number:
+          type: string
+        account_number:
+          type: string
+        account_type:
+          type: string
+          enum: [checking, savings]
+        # Debit card fields
+        card_token:
+          type: string
+          description: Tokenized card from Moov
+        is_default:
+          type: boolean
+          default: false
+
+    FundingInstrumentList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/FundingInstrument'
+
+    # ===== Prefund =====
+    PrefundAccount:
+      type: object
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+        balance_cents:
+          type: integer
+          description: Total balance
+        available_cents:
+          type: integer
+          description: Available for disbursement (excludes holds)
+        held_cents:
+          type: integer
+          description: Funds on hold (pending deposits, committed to disbursements)
+        pending_deposits_cents:
+          type: integer
+        pending_withdrawals_cents:
+          type: integer
+        updated_at:
+          type: string
+          format: date-time
+
+    PrefundDepositRequest:
+      type: object
+      required: [amount_cents, funding_instrument_id]
+      properties:
+        amount_cents:
+          type: integer
+          minimum: 10000
+        funding_instrument_id:
+          type: string
+          format: uuid
+
+    PrefundWithdrawRequest:
+      type: object
+      required: [amount_cents, funding_instrument_id]
+      properties:
+        amount_cents:
+          type: integer
+          minimum: 1
+        funding_instrument_id:
+          type: string
+          format: uuid
+
+    PrefundTransaction:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        customer_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [deposit, withdrawal, disbursement_hold, disbursement_release, fee]
+        amount_cents:
+          type: integer
+        status:
+          type: string
+          enum: [pending, completed, failed]
+        rail:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    PrefundTransactionList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PrefundTransaction'
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    # ===== Loan Offers =====
+    LoanOffer:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        product_id:
+          type: string
+          format: uuid
+        lender_id:
+          type: string
+          format: uuid
+        borrower_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [draft, sent, viewed, accepted, rejected, expired, cancelled]
+        terms:
+          $ref: '#/components/schemas/LoanTerms'
+        express_fee_estimate_cents:
+          type: integer
+          description: Estimated express fee if instant disbursement selected
+        express_fee_waived:
+          type: boolean
+          description: True if lender prefund covers disbursement
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        sent_at:
+          type: string
+          format: date-time
+        viewed_at:
+          type: string
+          format: date-time
+        responded_at:
+          type: string
+          format: date-time
+
+    CreateLoanOfferRequest:
+      type: object
+      required: [product_id, lender_id, borrower_id, terms]
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        lender_id:
+          type: string
+          format: uuid
+        borrower_id:
+          type: string
+          format: uuid
+        terms:
+          $ref: '#/components/schemas/LoanTerms'
+        expires_in_hours:
+          type: integer
+          minimum: 1
+          maximum: 720
+          default: 168
+          description: Hours until offer expires (default 7 days)
+        message:
+          type: string
+          maxLength: 1000
+          description: Optional message to borrower
+
+    LoanTerms:
+      type: object
+      required: [principal_cents, apr_bps, term_months, payment_frequency]
+      properties:
+        principal_cents:
+          type: integer
+          minimum: 10000
+          maximum: 5000000
+        apr_bps:
+          type: integer
+          minimum: 0
+          maximum: 3600
+          description: APR in basis points (e.g., 1200 = 12.00%)
+        term_months:
+          type: integer
+          minimum: 1
+          maximum: 60
+        payment_frequency:
+          type: string
+          enum: [weekly, biweekly, monthly]
+        first_payment_date:
+          type: string
+          format: date
+          description: If not specified, calculated based on disbursement + min days
+
+    LoanOfferList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LoanOffer'
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    AcceptOfferRequest:
+      type: object
+      required: [funding_instrument_id, disbursement_speed]
+      properties:
+        funding_instrument_id:
+          type: string
+          format: uuid
+          description: Where to receive disbursement
+        disbursement_speed:
+          type: string
+          enum: [standard, instant]
+        repayment_instrument_id:
+          type: string
+          format: uuid
+          description: Where to pull repayments (defaults to disbursement instrument)
+        accept_express_fee:
+          type: boolean
+          description: Required if instant and fee applies
+
+    # ===== Loan Contracts =====
+    LoanContract:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        offer_id:
+          type: string
+          format: uuid
+        product_id:
+          type: string
+          format: uuid
+        lender_id:
+          type: string
+          format: uuid
+        borrower_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending_disbursement, active, paid_off, defaulted, cancelled]
+        terms:
+          $ref: '#/components/schemas/LoanTerms'
+        disbursement:
+          $ref: '#/components/schemas/DisbursementSummary'
+        balances:
+          $ref: '#/components/schemas/LoanBalances'
+        next_payment:
+          $ref: '#/components/schemas/ScheduledPayment'
+        originated_at:
+          type: string
+          format: date-time
+        disbursed_at:
+          type: string
+          format: date-time
+        paid_off_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    LoanContractList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LoanContract'
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    LoanBalances:
+      type: object
+      properties:
+        principal_cents:
+          type: integer
+        interest_cents:
+          type: integer
+        fees_cents:
+          type: integer
+        total_due_cents:
+          type: integer
+        past_due_cents:
+          type: integer
+        payoff_amount_cents:
+          type: integer
+          description: Amount to pay off loan today
+
+    LoanSummary:
+      type: object
+      properties:
+        contract_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        balances:
+          $ref: '#/components/schemas/LoanBalances'
+        next_payment:
+          $ref: '#/components/schemas/ScheduledPayment'
+        payments_made:
+          type: integer
+        payments_remaining:
+          type: integer
+        days_past_due:
+          type: integer
+
+    # ===== Repayment Schedule =====
+    RepaymentSchedule:
+      type: object
+      properties:
+        contract_id:
+          type: string
+          format: uuid
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScheduledPayment'
+        total_principal_cents:
+          type: integer
+        total_interest_cents:
+          type: integer
+        total_amount_cents:
+          type: integer
+
+    ScheduledPayment:
+      type: object
+      properties:
+        sequence:
+          type: integer
+        due_date:
+          type: string
+          format: date
+        principal_cents:
+          type: integer
+        interest_cents:
+          type: integer
+        fees_cents:
+          type: integer
+        total_cents:
+          type: integer
+        status:
+          type: string
+          enum: [scheduled, due, paid, partial, past_due]
+        paid_cents:
+          type: integer
+        paid_at:
+          type: string
+          format: date-time
+
+    # ===== Disbursements =====
+    DisbursementRequest:
+      type: object
+      required: [speed]
+      properties:
+        speed:
+          type: string
+          enum: [standard, instant]
+        funding_instrument_id:
+          type: string
+          format: uuid
+          description: Override destination (defaults to contract's instrument)
+
+    Disbursement:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        contract_id:
+          type: string
+          format: uuid
+        amount_cents:
+          type: integer
+        express_fee_cents:
+          type: integer
+        net_amount_cents:
+          type: integer
+          description: Amount after fee deduction
+        speed:
+          type: string
+          enum: [standard, instant]
+        rail:
+          type: string
+          enum: [ach, same_day_ach, rtp, fednow, push_to_card]
+        status:
+          type: string
+          enum: [initiated, pending, completed, failed]
+        availability:
+          $ref: '#/components/schemas/FundsAvailability'
+        funding_instrument_id:
+          type: string
+          format: uuid
+        source:
+          type: string
+          enum: [prefund, direct]
+          description: Whether funded from prefund or direct transfer
+        initiated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        failure_reason:
+          type: string
+
+    DisbursementSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        amount_cents:
+          type: integer
+        express_fee_cents:
+          type: integer
+        net_amount_cents:
+          type: integer
+        speed:
+          type: string
+        rail:
+          type: string
+        status:
+          type: string
+        completed_at:
+          type: string
+          format: date-time
+
+    FundsAvailability:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [initiated, pending, received, held, available, failed]
+        available_at:
+          type: string
+          format: date-time
+        hold_reason:
+          type: string
+        hold_expires_at:
+          type: string
+          format: date-time
+
+    # ===== Repayments =====
+    RepaymentRequest:
+      type: object
+      required: [amount_cents]
+      properties:
+        amount_cents:
+          type: integer
+          minimum: 1
+        funding_instrument_id:
+          type: string
+          format: uuid
+        scheduled_date:
+          type: string
+          format: date
+          description: Schedule for future date (omit for immediate)
+        is_payoff:
+          type: boolean
+          description: If true, amount must equal payoff amount
+
+    Repayment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        contract_id:
+          type: string
+          format: uuid
+        amount_cents:
+          type: integer
+        status:
+          type: string
+          enum: [scheduled, initiated, pending, completed, failed, returned]
+        rail:
+          type: string
+        funding_instrument_id:
+          type: string
+          format: uuid
+        application:
+          $ref: '#/components/schemas/PaymentApplication'
+        availability:
+          $ref: '#/components/schemas/FundsAvailability'
+        scheduled_date:
+          type: string
+          format: date
+        initiated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        failure_reason:
+          type: string
+
+    RepaymentList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Repayment'
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    PaymentApplication:
+      type: object
+      description: How the payment was applied per waterfall policy
+      properties:
+        fees_cents:
+          type: integer
+        interest_cents:
+          type: integer
+        principal_cents:
+          type: integer
+        breakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              bucket:
+                type: string
+              amount_cents:
+                type: integer
+
+    # ===== Documents =====
+    Document:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        contract_id:
+          type: string
+          format: uuid
+        document_type:
+          type: string
+          enum: [receipt, statement, contract, amendment, other]
+        filename:
+          type: string
+        content_type:
+          type: string
+        size_bytes:
+          type: integer
+        sha256:
+          type: string
+        description:
+          type: string
+        uploaded_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    DocumentList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Document'
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    # ===== Webhooks =====
+    CreateWebhookRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+            enum:
+              - loan_offer.sent
+              - loan_offer.accepted
+              - loan_offer.rejected
+              - loan_offer.expired
+              - loan_contract.created
+              - loan_contract.status_changed
+              - disbursement.initiated
+              - disbursement.completed
+              - disbursement.failed
+              - repayment.initiated
+              - repayment.completed
+              - repayment.failed
+              - repayment.returned
+              - funds.available
+              - prefund.deposit_completed
+              - prefund.withdrawal_completed
+              - kyc.status_changed
+        secret:
+          type: string
+          description: Shared secret for HMAC signature (auto-generated if not provided)
+
+    Webhook:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+        secret:
+          type: string
+          description: Only returned on creation
+        status:
+          type: string
+          enum: [active, disabled]
+        created_at:
+          type: string
+          format: date-time
+
+    WebhookList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Webhook'
+
+    WebhookEvent:
+      type: object
+      description: Webhook payload sent to registered endpoints
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        data:
+          type: object
+          description: Event-specific payload
+      example:
+        id: "evt_123"
+        type: "disbursement.completed"
+        created_at: "2025-01-15T10:30:00Z"
+        data:
+          disbursement_id: "disb_456"
+          contract_id: "ctr_789"
+          amount_cents: 150000
+          rail: "rtp"
+
+    # ===== Ledger =====
+    LedgerJournal:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        contract_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [disbursement, repayment, fee, interest_accrual, reversal, adjustment]
+        description:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerEntry'
+        is_reversal:
+          type: boolean
+        reverses_journal_id:
+          type: string
+          format: uuid
+        reversed_by_journal_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+          format: uuid
+
+    LedgerEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        journal_id:
+          type: string
+          format: uuid
+        account:
+          type: string
+          description: Hierarchical account code (e.g., "assets:loans_receivable:principal")
+        debit_cents:
+          type: integer
+        credit_cents:
+          type: integer
+        balance_after_cents:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    LedgerEntryList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerEntry'
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    # ===== Reconciliation =====
+    ReconciliationException:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date
+        type:
+          type: string
+          enum: [balance_mismatch, stuck_payment, duplicate_transaction, missing_webhook, other]
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        description:
+          type: string
+        affected_entity_type:
+          type: string
+        affected_entity_id:
+          type: string
+          format: uuid
+        expected_value:
+          type: string
+        actual_value:
+          type: string
+        status:
+          type: string
+          enum: [open, investigating, resolved]
+        resolution_notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+        resolved_by:
+          type: string
+          format: uuid
+
+    ReconciliationExceptionList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconciliationException'
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    # ===== Errors =====
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+        message:
+          type: string
+          description: Human-readable message
+        details:
+          type: object
+          description: Additional context
+        request_id:
+          type: string
+          description: Request ID for support
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "invalid_request"
+            message: "Principal must be between $100 and $50,000"
+            request_id: "req_abc123"
+
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "unauthorized"
+            message: "Invalid or expired token"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "not_found"
+            message: "Loan contract not found"
+
+    Conflict:
+      description: Conflict with current state
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "invalid_state"
+            message: "Offer has already been accepted"
+
+# ===== Error Taxonomy =====
+#
+# Error codes follow the pattern: {category}_{specific}
+#
+# Authentication/Authorization:
+#   - unauthorized: Missing or invalid token
+#   - forbidden: Valid token but insufficient permissions
+#   - step_up_required: Sensitive action requires re-authentication
+#
+# Validation:
+#   - invalid_request: Malformed request body
+#   - invalid_parameter: Specific parameter validation failed
+#   - terms_out_of_policy: Loan terms violate product policy
+#
+# State:
+#   - invalid_state: Action not allowed in current state
+#   - already_exists: Duplicate resource (use idempotency key)
+#   - not_found: Resource doesn't exist
+#
+# Payment:
+#   - insufficient_funds: Not enough balance
+#   - instrument_invalid: Funding instrument can't be used
+#   - payment_failed: Payment provider rejected
+#   - payment_returned: Payment was returned/reversed
+#
+# Limits:
+#   - limit_exceeded: Transaction or balance limit hit
+#   - rate_limited: Too many requests
+#
+# System:
+#   - internal_error: Unexpected server error
+#   - service_unavailable: Temporary outage
+#   - provider_error: Payment provider issue

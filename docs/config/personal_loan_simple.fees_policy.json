@@ -1,0 +1,153 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://bigfin.io/schemas/personal_loan_simple.fees_policy.json",
+  "title": "Personal Loan Simple - Fees Policy",
+  "description": "Fee rules for GreenBucks Personal Loan Simple product. Tenant-scoped.",
+  "_design_rationale": {
+    "express_fee_model": "flat_bands",
+    "why_flat_bands": [
+      "Predictable and transparent: users know exact fee upfront regardless of loan size within band",
+      "Simpler implementation: no percentage calculations or rounding edge cases",
+      "Regulatory clarity: flat fees avoid appearance of hidden scaling charges",
+      "User trust: percentage fees on small loans can feel disproportionate",
+      "Audit simplicity: fee amount is deterministic from principal band lookup"
+    ],
+    "alternative_considered": "percentage_with_caps",
+    "why_not_percentage": "Adds complexity (min/max caps, rounding rules, edge cases at boundaries) without clear user benefit for MVP1 scope"
+  },
+  "version": "1.0.0",
+  "effective_date": "2025-01-01",
+  "fees": {
+    "express_disbursement": {
+      "enabled": true,
+      "description": "One-time fee for instant disbursement (RTP/FedNow/push-to-card). Waived if lender has sufficient prefund.",
+      "applies_when": {
+        "speed": "instant",
+        "waived_by_prefund": false
+      },
+      "fee_payer": {
+        "default": "borrower",
+        "allowed": ["borrower", "lender"],
+        "description": "Who pays the express fee. Defaults to borrower; lender can opt to cover."
+      },
+      "collection_method": {
+        "type": "deducted_from_disbursement",
+        "alternatives": ["charged_separately", "financed_into_loan"],
+        "description": "Fee is deducted from disbursement amount. Alternatives reserved for future."
+      },
+      "fee_structure": {
+        "type": "flat_bands",
+        "currency": "USD",
+        "bands": [
+          {
+            "min_principal_cents": 10000,
+            "max_principal_cents": 50000,
+            "fee_cents": 299,
+            "description": "$100.00 - $500.00 principal: $2.99 fee"
+          },
+          {
+            "min_principal_cents": 50001,
+            "max_principal_cents": 200000,
+            "fee_cents": 499,
+            "description": "$500.01 - $2,000.00 principal: $4.99 fee"
+          },
+          {
+            "min_principal_cents": 200001,
+            "max_principal_cents": 500000,
+            "fee_cents": 799,
+            "description": "$2,000.01 - $5,000.00 principal: $7.99 fee"
+          },
+          {
+            "min_principal_cents": 500001,
+            "max_principal_cents": 1000000,
+            "fee_cents": 999,
+            "description": "$5,000.01 - $10,000.00 principal: $9.99 fee"
+          },
+          {
+            "min_principal_cents": 1000001,
+            "max_principal_cents": 2500000,
+            "fee_cents": 1499,
+            "description": "$10,000.01 - $25,000.00 principal: $14.99 fee"
+          },
+          {
+            "min_principal_cents": 2500001,
+            "max_principal_cents": 5000000,
+            "fee_cents": 1999,
+            "description": "$25,000.01 - $50,000.00 principal: $19.99 fee"
+          }
+        ]
+      },
+      "disclosure_requirements": {
+        "must_itemize": true,
+        "show_before_confirmation": true,
+        "include_in_loan_estimate": true,
+        "description": "Fee must be clearly disclosed and itemized before user confirms instant option."
+      }
+    },
+    "late_payment": {
+      "enabled": false,
+      "description": "Late payment fee. Disabled for MVP1; placeholder for future.",
+      "_placeholder": {
+        "applies_after_grace_days": 15,
+        "fee_type": "lesser_of",
+        "flat_fee_cents": 2500,
+        "percentage_bps": 500,
+        "max_fee_cents": 2500,
+        "description": "Lesser of $25 or 5% of payment due, capped at $25."
+      },
+      "regulatory_notes": [
+        "Must comply with state-specific late fee caps",
+        "Some states limit to percentage of payment, others to flat amount",
+        "Grace period requirements vary by state"
+      ]
+    },
+    "nsf_returned_payment": {
+      "enabled": false,
+      "description": "NSF/returned payment fee. Disabled for MVP1; placeholder for future.",
+      "_placeholder": {
+        "fee_cents": 2500,
+        "max_per_payment": 1,
+        "description": "$25 per returned payment, max once per scheduled payment."
+      },
+      "regulatory_notes": [
+        "Subject to state caps (some states cap at $20-30)",
+        "May not exceed actual cost incurred in some jurisdictions"
+      ]
+    },
+    "origination": {
+      "enabled": false,
+      "description": "Origination fee. Not applicable for P2P loans in MVP1."
+    },
+    "prepayment_penalty": {
+      "enabled": false,
+      "description": "Prepayment penalty. Disabled for MVP1; discouraged for consumer-friendly UX.",
+      "_placeholder": {
+        "applies_within_months": 12,
+        "penalty_bps": 200,
+        "description": "2% of remaining principal if paid off within first 12 months."
+      }
+    }
+  },
+  "prefund_waiver": {
+    "description": "Express fee waiver rules when lender has sufficient prefund balance.",
+    "waiver_type": "full",
+    "threshold_type": "percentage_of_principal",
+    "threshold_percentage": 100,
+    "description_detailed": "Express fee is fully waived if lender's available prefund balance >= 100% of loan principal at time of disbursement initiation.",
+    "alternative_thresholds": {
+      "_comment": "Future: tiered waivers based on partial prefund coverage",
+      "examples": [
+        { "prefund_coverage_pct": 100, "waiver_pct": 100 },
+        { "prefund_coverage_pct": 50, "waiver_pct": 50 },
+        { "prefund_coverage_pct": 0, "waiver_pct": 0 }
+      ]
+    }
+  },
+  "ledger_integration": {
+    "express_fee_account": "revenue:fees:express_disbursement",
+    "late_fee_account": "revenue:fees:late_payment",
+    "nsf_fee_account": "revenue:fees:nsf",
+    "fee_recognition": "on_collection",
+    "description": "Fees are recognized in ledger when collected, not when assessed."
+  }
+}

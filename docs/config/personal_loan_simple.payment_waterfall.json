@@ -1,0 +1,123 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://bigfin.io/schemas/personal_loan_simple.payment_waterfall.json",
+  "title": "Personal Loan Simple - Payment Application Waterfall",
+  "description": "Defines the order in which incoming payments are applied to loan balances. Tenant-scoped.",
+  "version": "1.0.0",
+  "effective_date": "2025-01-01",
+  "waterfall": {
+    "description": "Payment application order. Funds flow through each bucket in sequence until exhausted.",
+    "application_order": [
+      {
+        "priority": 1,
+        "bucket": "fees",
+        "ledger_account": "receivable:fees",
+        "description": "Outstanding fees (late fees, NSF fees, etc.) are paid first.",
+        "sub_priority": [
+          { "order": 1, "type": "late_fee", "account": "receivable:fees:late" },
+          { "order": 2, "type": "nsf_fee", "account": "receivable:fees:nsf" },
+          { "order": 3, "type": "other_fee", "account": "receivable:fees:other" }
+        ]
+      },
+      {
+        "priority": 2,
+        "bucket": "interest",
+        "ledger_account": "receivable:interest",
+        "description": "Accrued interest is paid after fees.",
+        "sub_priority": [
+          { "order": 1, "type": "past_due_interest", "account": "receivable:interest:past_due" },
+          { "order": 2, "type": "current_interest", "account": "receivable:interest:current" }
+        ]
+      },
+      {
+        "priority": 3,
+        "bucket": "principal",
+        "ledger_account": "receivable:principal",
+        "description": "Principal reduction after interest.",
+        "sub_priority": [
+          { "order": 1, "type": "past_due_principal", "account": "receivable:principal:past_due" },
+          { "order": 2, "type": "current_principal", "account": "receivable:principal:current" }
+        ]
+      },
+      {
+        "priority": 4,
+        "bucket": "escrow",
+        "ledger_account": "receivable:escrow",
+        "enabled": false,
+        "description": "Escrow for taxes/insurance. DISABLED for Personal Loan Simple product.",
+        "sub_priority": [
+          { "order": 1, "type": "property_tax", "account": "receivable:escrow:tax" },
+          { "order": 2, "type": "insurance", "account": "receivable:escrow:insurance" }
+        ],
+        "_note": "Escrow is typically used for mortgage products, not personal loans."
+      },
+      {
+        "priority": 5,
+        "bucket": "suspense",
+        "ledger_account": "liability:suspense",
+        "description": "Any excess funds after all buckets are satisfied go to suspense for later application or refund.",
+        "handling": {
+          "auto_apply_to_principal": false,
+          "hold_for_next_payment": true,
+          "refund_threshold_cents": 100,
+          "description": "Suspense funds held for next scheduled payment. Refunded if balance exceeds threshold at loan payoff."
+        }
+      }
+    ]
+  },
+  "special_handling": {
+    "partial_payment": {
+      "allowed": true,
+      "application": "waterfall_order",
+      "description": "Partial payments applied in waterfall order. May leave later buckets unpaid."
+    },
+    "overpayment": {
+      "handling": "suspense",
+      "auto_apply_principal": false,
+      "description": "Overpayments go to suspense. Not auto-applied to principal to maintain predictable schedule."
+    },
+    "prepayment": {
+      "allowed": true,
+      "application": "principal_only",
+      "recalculation": "reduce_term",
+      "alternatives": ["reduce_payment", "reduce_term"],
+      "description": "Explicit prepayments applied to principal. Default behavior reduces loan term, not payment amount."
+    },
+    "payment_reversal": {
+      "method": "reversal_journal",
+      "description": "Reversed payments (NSF, chargeback) create reversal journal entries. Original entries remain immutable."
+    }
+  },
+  "timing_rules": {
+    "interest_accrual_method": "actual_365",
+    "alternatives": ["actual_360", "30_360"],
+    "description": "Interest accrues daily based on actual days / 365. Standard for consumer loans.",
+    "payment_effective_date": "funds_available_date",
+    "description_effective": "Payment is applied as of the date funds become available, not initiated date.",
+    "cutoff_time": "17:00",
+    "cutoff_timezone": "America/New_York",
+    "description_cutoff": "Payments received after 5 PM ET apply to next business day."
+  },
+  "ledger_journal_template": {
+    "description": "Template for payment application journal entries.",
+    "example": {
+      "journal_id": "{{uuid}}",
+      "loan_contract_id": "{{loan_contract_id}}",
+      "payment_intent_id": "{{payment_intent_id}}",
+      "effective_date": "{{funds_available_date}}",
+      "entries": [
+        { "account": "asset:cash:operating", "debit_cents": "{{total_payment}}", "credit_cents": 0 },
+        { "account": "receivable:fees:late", "debit_cents": 0, "credit_cents": "{{fees_applied}}" },
+        { "account": "receivable:interest:current", "debit_cents": 0, "credit_cents": "{{interest_applied}}" },
+        { "account": "receivable:principal:current", "debit_cents": 0, "credit_cents": "{{principal_applied}}" },
+        { "account": "liability:suspense", "debit_cents": 0, "credit_cents": "{{suspense_amount}}" }
+      ],
+      "invariant": "sum(debits) == sum(credits)"
+    }
+  },
+  "audit_requirements": {
+    "log_each_bucket_application": true,
+    "retain_waterfall_decision_log": true,
+    "description": "Every payment application must log which buckets received funds and amounts."
+  }
+}
