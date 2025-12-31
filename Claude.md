@@ -166,9 +166,9 @@ Claude.md                 # this file (plan + log)
 ### Build (Backend)
 - [x] Scaffold /backend with migrations + modules → TypeScript + Fastify + Prisma
 - [x] Auth + tenant + roles (routes created, tested)
-- [x] Ledger (double-entry + tests) → 12 tests passing
-- [ ] PaymentIntent + routing + webhook ingestion + idempotency
-- [ ] Daily reconciliation job + exception reporting
+- [x] Ledger (double-entry + tests) → 14 tests passing
+- [x] PaymentIntent + routing + webhook ingestion + idempotency → 100 tests (routing, transfer, webhook)
+- [x] Daily reconciliation job + exception reporting → 33 tests
 - [ ] Minimal operator endpoints
 
 ### Build (Client)
@@ -194,6 +194,8 @@ Claude.md                 # this file (plan + log)
 - 2025-12-30: Scaffolded /backend with TypeScript + Fastify + Prisma. Created full Prisma schema (25+ models), all module routes, error handling, auth middleware, and env config.
 - 2025-12-30: Set up Neon database and seeded with GreenBucks tenant, users, loan product, ledger accounts, sample customers, funding instruments, and loan offer.
 - 2025-12-30: Implemented double-entry ledger service with transaction templates (disbursement, repayment, fee, interest, write-off), balance queries, trial balance, and journal reversals. 12 tests passing.
+- 2025-12-30: Implemented payment routing service (RTP→FedNow→push-to-card→ACH fallback), transfer service with Moov integration, and webhook handler. 100 tests covering routing, transfers, and webhooks.
+- 2025-12-30: Added daily reconciliation service comparing local records with Moov provider, detecting status/amount mismatches, orphaned/missing transfers, ledger imbalances, and prefund balance discrepancies. Auto-resolution for status updates. 33 tests. Total: 145 tests passing.
 
 ---
 
