@@ -26,6 +26,7 @@ import { ledgerRoutes } from './modules/ledger/routes.js';
 import { documentRoutes } from './modules/documents/routes.js';
 import { webhookRoutes } from './modules/webhooks/routes.js';
 import { operatorRoutes } from './modules/operator/routes.js';
+import { reconciliationRoutes } from './modules/reconciliation/routes.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -152,6 +153,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       await api.register(documentRoutes, { prefix: '/documents' });
       await api.register(webhookRoutes, { prefix: '/webhooks' });
       await api.register(operatorRoutes, { prefix: '/operator' });
+      await api.register(reconciliationRoutes, { prefix: '/reconciliation' });
     },
     { prefix: '/v1' }
   );
